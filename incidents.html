@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <style>
+        /*.spinner {*/
+        /*    margin: 100px auto 0;*/
+        /*    width: 70px;*/
+        /*    text-align: center;*/
+        /*}*/
+
+        .spinner > div {
+            width: 18px;
+            height: 18px;
+            background-color: cornflowerblue;
+
+            border-radius: 100%;
+            display: inline-block;
+            -webkit-animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+            animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+        }
+
+        .spinner .bounce1 {
+            -webkit-animation-delay: -0.32s;
+            animation-delay: -0.32s;
+        }
+
+        .spinner .bounce2 {
+            -webkit-animation-delay: -0.16s;
+            animation-delay: -0.16s;
+        }
+
+        @-webkit-keyframes sk-bouncedelay {
+            0%, 80%, 100% { -webkit-transform: scale(0) }
+            40% { -webkit-transform: scale(1.0) }
+        }
+
+        @keyframes sk-bouncedelay {
+            0%, 80%, 100% {
+                -webkit-transform: scale(0);
+                transform: scale(0);
+            } 40% {
+                  -webkit-transform: scale(1.0);
+                  transform: scale(1.0);
+              }
+        }
+    </style>
+    <script defer>
+        const higherIncidentThreshold = 0.15;
+        const lowerIncidentThreshold = 0.03
+        const url = "https://influxapi.egamings.com/query?q=";
+        const now = new Date();
+        const loadText = 'Идет загрузка инцидентов... Подождите';
+        const successText = 'Загрузка завершена!'
+
+        let dateFrom = document.querySelector('#datetime-start');
+        let dateTo = document.querySelector('#datetime-end');
+        let influxQueryNode = '';
+
+        const getDateTimeChosen = function () {
+
+            dateFrom = document.querySelector('#datetime-start');
+            dateTo = document.querySelector('#datetime-end');
+
+            if (Date.parse(`${dateTo.value}:00Z`) < Date.parse(`${dateFrom.value}:00Z`)){
+                alert(`Date-time in "From" field can't be more that in "To" field!`);
+                return false;
+            };
+            const queryDateFrom = `${new Date(Date.parse(`${dateFrom.value}:00Z`) - 3 * 60 * 60 * 1000).toISOString().slice(0, -5)}Z`;
+            const queryDateTo = `${new Date(Date.parse(`${dateTo.value}:00Z`) - 3 * 60 * 60 * 1000).toISOString().slice(0, -5)}Z`;
+
+            return {queryDateFrom,queryDateTo}
+        }
+
+        const getInfluxShit = async function (node = 'all'){
+
+            let result;
+
+            switch(true){
+                case node === 1:
+                    result = await fetchForData(1);
+                    break;
+                case node === 2:
+                    result = await fetchForData(2);
+                    break;
+                case node === 3:
+                    result = await fetchForData(3);
+                    break;
+                default:
+                    result = await fetchForData();
+                    break;
+            };
+
+            return result;
+
+        };
+
+        const fetchForData = async function (node = 'all') {
+            const date = getDateTimeChosen();
+            let mr_req_time_in_system;
+            let influxQuery;
+            let query;
+            let responseJson = [];
+
+            let queryData = {
+                nodeHost: ['site2-deac-loggingdb1-4','site2-deac-loggingdb2-4','site1-telia-loggingdb3-4'],
+                nodeReqTimeField: ['mr_req_time_in_system', 'mr_req_time_in_system2', 'mr_req_time_in_system3' ]
+            }
+
+            switch(true){
+                case node === 1:
+                    influxQueryNode = queryData.nodeHost[0];
+                    mr_req_time_in_system = queryData.nodeReqTimeField[0];;
+                    break;
+                case node === 2:
+                    influxQueryNode = queryData.nodeHost[1];
+                    mr_req_time_in_system = queryData.nodeReqTimeField[1];
+                    break;
+                case node === 3:
+                    influxQueryNode = queryData.nodeHost[2];
+                    mr_req_time_in_system = queryData.nodeReqTimeField[2];
+                    break;
+            };
+
+            if(node != 'all'){
+                influxQuery =`SELECT host, last(${mr_req_time_in_system}) FROM "telegraf". "autogen"."grafana_mr_requests" WHERE host='${influxQueryNode}' AND  time >= '${date.queryDateFrom}' AND time < '${date.queryDateTo}' GROUP BY (time(60s))`;
+                query = `${url}${influxQuery}`;
+            } else {
+                query = `${url}`
+                for (let i = 0; i < queryData.nodeReqTimeField.length; i++){
+                    influxQuery =`SELECT host, last(${queryData.nodeReqTimeField[i]}) FROM "telegraf". "autogen"."grafana_mr_requests" WHERE host='${queryData.nodeHost[i]}' AND  time >= '${date.queryDateFrom}' AND time < '${date.queryDateTo}' GROUP BY (time(60s))`;
+                    query += `${influxQuery}%3B`
+                }
+            }
+
+            const getData = await fetch(query);
+            const response = await getData.json();
+            if(response.results.length>1){
+                responseJson = [].concat(response.results[0].series[0].values, response.results[1].series[0].values, response.results[2].series[0].values);
+            } else {
+                responseJson = response.results[0].series[0].values;
+            }
+            return responseJson;
+        };
+
+        const getIncidents = async function (array) {
+            let incidentsArray = [];
+            let result;
+
+            for (let i = 0; i < array.length; i++) {
+                if (array[i][2] > higherIncidentThreshold || array[i][2] < lowerIncidentThreshold ){
+                    let node = '';
+
+                    if (array[i][1] === 'site2-deac-loggingdb1-4') {
+                        node = "1ая нода"
+                    } else if (array[i][1] === 'site2-deac-loggingdb2-4') {
+                        node = "2ая нода";
+                    } else {
+                        node = "3яя нода"
+                    }
+
+                    incidentsArray.push({
+                        incidentStart: Date.parse(array[i][0]) - 60000,
+                        incidentEnd: Date.parse(array[i][0]) + 60000,
+                        host: node,
+                        netto: (array[i][2]) ? array[i][2].toFixed(3) : 'Нет данных'
+                    })
+                }
+            }
+            result = checkForLongIncidents(incidentsArray);
+
+            return result;
+        };
+
+        const checkForLongIncidents = function (array){
+
+            for (let i = 0; i < array.length;){
+
+                if (array[i+1] === undefined){
+                    break
+                } else {
+                    if(array[i].host === array[i+1].host){
+                        const timeDiff = array[i].incidentEnd - array[i+1].incidentStart;
+                        if(timeDiff <= 1 *60 *1000 && timeDiff >= -1 * 60 * 1000){
+                            let maxNetto = Math.max(array[i].netto, array[i + 1].netto);
+
+                            array[i] = {
+                                incidentStart: array[i].incidentStart,
+                                incidentEnd: array[i + 1].incidentEnd,
+                                host: array[i].host,
+                                netto: maxNetto,
+                            }
+                            array.splice(i+1, 1);
+                        } else {
+                            i++;
+                        }
+                    } else {
+                        i++;
+                    }
+                }
+            }
+
+            return array;
+        };
+
+        const parseIncidents = function (incidentsArray) {
+            let resultArray = [];
+            resultArray = incidentsArray.map(value => {
+                return [
+                    new Date(value.incidentStart + 3 * 60 * 60 * 1000).toISOString().slice(0,-8),
+                    new Date(value.incidentEnd + 3 * 60 * 60 * 1000).toISOString().slice(0,-8),
+                    '=TEXT(INDIRECT("R[0]C[-1]";FALSE)-INDIRECT("R[0]C[-2]";FALSE);"hh:mm:ss")',
+                    `${value.host} ${value.netto} ms`]
+            });
+            return resultArray;
+        };
+
+        const loadingSpinner = (state, bouncers = 3) => {
+            const loader = document.querySelector('.loader');
+            const spinner = document.createElement('div');
+
+            if (state === 'start') {
+                for (let i = 1; i <= bouncers;i++){
+                    const bounce = document.createElement('div');
+                    bounce.classList.add(`bounce${i}`);
+                    spinner.append(bounce)
+                }
+                spinner.classList.add('spinner')
+                loader.textContent = loadText;
+                loader.insertAdjacentElement('beforeend',spinner)
+            } else if (state === 'stop'){
+                const spinnerElem = document.querySelector('.spinner');
+                loader.textContent = successText;
+                spinnerElem.remove()
+            }
+
+        }
+
+        const main = async function (node = 'all') {
+
+            //собираем данные за выбранный период из инфлюкса
+            let responseJson = await getInfluxShit(node);
+
+            //из полученного набора выделяем инциденты
+            let result = await getIncidents(responseJson);
+
+            //делаем "красиво" - разбираем полученный массив данных для вставки в таблицу
+            let parsedIncidentArray = parseIncidents(result)
+            return parsedIncidentArray;
+
+        }
+        const writeData = async function (node = 'all') {
+            loadingSpinner('start',4);
+            let result = await main(node);
+            console.log(result);
+            // google.script.run.writeIncedents(result);
+            loadingSpinner('stop');
+        }
+
+        window.onload = () => {
+            let threshold = document.querySelector('#threshold');
+            let lowerThreshold = document.querySelector('#lower-threshold');
+
+            dateFrom = document.querySelector('#datetime-start');
+            dateTo = document.querySelector('#datetime-end');
+
+            threshold.textContent = `${(higherIncidentThreshold) * 1000} ms`;
+            lowerThreshold.textContent = `${(lowerIncidentThreshold) * 1000} ms`;
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            dateTo.value = now.toISOString().slice(0, -8);
+            now.setDate(now.getDate() - 1);
+            dateFrom.value = now.toISOString().slice(0, -8);
+
+        }
+
+    </script>
+</head>
+<body>
+<label for="threshold">Incident threshold:</label><br>
+<div id="threshold"></div><br>
+<label for="lower-threshold">Lower incident threshold:</label><br>
+<div id="lower-threshold"></div><br>
+<label for="datetime-start">Incidents from:</label><br>
+<input type="datetime-local" id="datetime-start"><br>
+<label for="datetime-end">to:</label>
+</br>
+<input type="datetime-local" id="datetime-end"></br>
+</br>
+<button onclick="writeData(1)" >Первая нода</button></br>
+</br>
+<button onclick="writeData(2)" >Вторая нода</button></br>
+</br>
+<button onclick="writeData(3)" >Третья нода</button></br>
+</br>
+<button onclick="writeData()">Все ноды</button></br>
+<div class="loader">
+</div>
+</body>
+</html>

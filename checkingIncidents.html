@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <base target="_top">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <style>
+        /*.spinner {*/
+        /*    margin: 100px auto 0;*/
+        /*    width: 70px;*/
+        /*    text-align: center;*/
+        /*}*/
+
+        #indicator {
+            position: relative;
+            width: 20px;
+            height: 20px;
+            background-color: white;
+        }
+        .dot {
+            position: absolute;
+            height: 25px;
+            width: 25px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .spinner > div {
+            width: 18px;
+            height: 18px;
+            background-color: cornflowerblue;
+
+            border-radius: 100%;
+            display: inline-block;
+            -webkit-animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+            animation: sk-bouncedelay 1.4s infinite ease-in-out both;
+        }
+
+        .spinner .bounce1 {
+            -webkit-animation-delay: -0.32s;
+            animation-delay: -0.32s;
+        }
+
+        .spinner .bounce2 {
+            -webkit-animation-delay: -0.16s;
+            animation-delay: -0.16s;
+        }
+
+        @-webkit-keyframes sk-bouncedelay {
+            0%, 80%, 100% { -webkit-transform: scale(0) }
+            40% { -webkit-transform: scale(1.0) }
+        }
+
+        @keyframes sk-bouncedelay {
+            0%, 80%, 100% {
+                -webkit-transform: scale(0);
+                transform: scale(0);
+            } 40% {
+                  -webkit-transform: scale(1.0);
+                  transform: scale(1.0);
+              }
+        }
+
+    </style>
+    <script defer>
+        const loadText = 'Идет получение и обработка данных PMM2... Подождите';
+        const successText = 'Обработка завершена!';
+        let vmFlowControlQuery = '';
+        const vmLoggingDBQuery = '{__name__=~"mysql_global_status_threads_.*",service_name="site1-telia-loggingdb1-3-mysql"}';
+        let vmPinupQuery = '';
+
+
+        let dateFrom, dateTo, host, node;
+
+        const updateTime = (dateFrom,dateTo) => {
+            const dateFromPicker = document.querySelector('#datetime-start');
+            const dateToPicker = document.querySelector('#datetime-end');
+
+            dateToPicker.disabled = true;
+            dateToPicker.value = (new Date(Date.parse(dateTo) + 3 * 60 * 60 * 1000).toISOString().slice(0, -8));
+            dateFromPicker.disabled = true;
+            dateFromPicker.value = (new Date(Date.parse(dateFrom) + 3 * 60 * 60 * 1000).toISOString().slice(0, -8));
+        }
+
+        const idCleanUp = (...formID) => {
+            formID.forEach(value => {
+                const elements = document.querySelectorAll(`#${value}`);
+
+                if (elements){
+                    elements.forEach(element => {
+                        element.remove();
+                    })
+                }
+            })
+
+        }
+
+        const onReload = (dateObj) => {
+            const array = dateObj.split(', ');
+
+            dateFrom = array[0];
+            dateTo = array[1];
+            host = array[2];
+            if (host.includes('1ая')){
+                node = ''
+            } else if (host.includes('2ая')){
+                node = 2
+            } else if (host.includes('3яя')) {
+                node = 3
+            }
+            vmFlowControlQuery = `clamp_max(avg by (service_name) ((rate(mysql_global_status_wsrep_flow_control_paused_ns[10s]) or irate(mysql_global_status_wsrep_flow_control_paused_ns[5m])))/1000000000 * on (service_name) group_left avg by (service_name) (mysql_galera_variables_info{wsrep_cluster_name="fundb${node}"}),1)`
+            updateTime(array[0], array[1]);
+            idCleanUp('result', 'url', 'button', 'indicator')
+        }
+
+        const getDateTimeChosen = function () {
+
+            if (Date.parse(`${dateTo}:00Z`) < Date.parse(`${dateFrom}:00Z`)){
+                alert(`Date-time in "From" field can't be more that in "To" field!`);
+                return false;
+            };
+            const queryDateFrom = `${new Date(Date.parse(`${dateFrom}`)).toISOString().slice(0, -5)}Z`;
+            const queryDateTo = `${new Date(Date.parse(`${dateTo}`)).toISOString().slice(0, -5)}Z`;
+
+            return {queryDateFrom,queryDateTo}
+        }
+
+        const getPrometheusShit = async (vmQuery, promHost = 'pmm2.egamings.com/prometheus', step = 4) => {
+            const date = getDateTimeChosen();
+            const query = `https://${promHost}/api/v1/query_range?query=${vmQuery}&start=${date.queryDateFrom}&end=${date.queryDateTo}&step=${step}`;
+            return await fetch(query, {
+                headers: {
+                    "Authorization": "Basic Ym90X2Rhc2hib2FyZDplZVk3dGhhaCZpd2Vla29vY2hlZW1v",
+                }
+            }).then(response => response.json());
+        }
+
+        // Лезем за аннотациями, переписать на проверку инцидента по кнопке
+        const getAnnotations = async  function() {
+            const date = getDateTimeChosen();
+
+            const url = `https://dashboard.egamings.com/`;
+            const query = `api/annotations?from=${date.queryDateFrom}&to=${date.queryDateTo}&dashboardId=6`;
+            const getData = fetch(url+query, {
+                headers: {
+                    'Authorization': 'Basic Ym90X2Rhc2hib2FyZDplZVk3dGhhaCZpd2Vla29vY2hlZW1v'
+                }
+            })
+            const result = (await getData).json();
+            return result;
+        };
+
+        const loadingSpinner = (state, bouncers = 3) => {
+            const loader = document.querySelector('.loader');
+            const spinner = document.createElement('div');
+
+            if (state === 'start') {
+                for (let i = 1; i <= bouncers;i++){
+                    const bounce = document.createElement('div');
+                    bounce.classList.add(`bounce${i}`);
+                    spinner.append(bounce)
+                }
+                spinner.classList.add('spinner')
+                loader.textContent = loadText;
+                loader.insertAdjacentElement('beforeend',spinner)
+            } else if (state === 'stop'){
+                const spinnerElem = document.querySelector('.spinner');
+                loader.textContent = successText;
+                spinnerElem.remove()
+                setTimeout(() => {
+                    loader.textContent = '';
+                }, 3000)
+            }
+
+        }
+
+        const indicator = () => {
+            const div = document.createElement('div');
+            const loader = document.querySelector('.loader');
+            idCleanUp('indicator');
+            div.id = 'indicator';
+            div.classList.add('dot')
+            loader.insertAdjacentElement('afterend',div);
+        }
+
+        const responseArrayParse = async (checkType) => {
+            if (checkType === 'loggingDB'){
+                const response = await getPrometheusShit(vmLoggingDBQuery);
+                for (let i = 0; i < response.data.result.length;){
+                    if (!response.data.result[i].metric.__name__.includes('running')){
+                        if(!response.data.result[i].metric.__name__.includes('connected')){
+                            response.data.result.splice(i,1);
+                        } else {
+                            break
+                        }
+                    } else {
+                        i++
+                    }
+                }
+
+                return response.data.result;
+            } else if (checkType === 'flowControl'){
+                const response = await getPrometheusShit(vmFlowControlQuery);
+                const data = response.data.result;
+                const result = [];
+
+                for (let i = 0; i < data.length; i++){
+                    for (let j = 0; j < data[i].values.length; j++){
+                        if (data[i].values[j][1] > 0.1){
+                            result.push({
+                                host: data[i].metric.service_name,
+                                time: data[i].values[j][0],
+                                value: +data[i].values[j][1]
+                            })
+                        }
+                    }
+                }
+                if (result !== []){
+                    for (let i = 0; i < result.length;){
+                        if (result[i + 1] === undefined){
+                            break
+                        } else {
+                            if(result[i].host === result[i + 1].host){
+                                const deltaTime = result[i + 1].time - result[i].time;
+                                if (deltaTime <= 1 * 60 * 1000) {
+                                    const maxValue = Math.max(result[i+1].value, result[i].value);
+                                    result[i] = {
+                                        host: result[i].host,
+                                        time: (result[i + 1].time + result[i].time)/2,
+                                        value: maxValue
+                                    };
+                                    result.splice(i + 1,1);
+                                } else {
+                                    i++
+                                }
+                            } else {
+                                i++
+                            }
+                        }
+                    }
+                    return result;
+                }
+            } else if (checkType === 'pinup'){
+                const result = []
+                const fpmProcessesThreshold = 400;
+
+                let minFpmProcessesIdle;
+                for (let i = 0; i < 3; i++){
+                    vmPinupQuery = `php_fpm_idle_processes{app="funcore_prod_pinup", instance="site1-telia-app-${i+1}"}`;
+                    const response = await getPrometheusShit(vmPinupQuery, 'prom-telia.egamings.com', '61s');
+                    result.push(response.data.result[0].values);
+                }
+                for (let i = 0; i < result.length; i++){
+                    for (let j = 0; j < result[i].length; j++){
+
+                        if (result[i][j][1] < fpmProcessesThreshold){
+                            if ((result[i][j][1] < minFpmProcessesIdle) && minFpmProcessesIdle){
+                                minFpmProcessesIdle = result[i][j][1];
+                            } else if (!minFpmProcessesIdle){
+                                minFpmProcessesIdle = result[i][j][1];
+                            }
+                        }
+                    }
+                }
+                return minFpmProcessesIdle;
+            } else if (checkType === 'annotations'){
+                const response = getAnnotations();
+
+                return response
+            }
+        }
+
+        const showResult = (result, time, url, host) => {
+            const loader = document.querySelector('.loader');
+            if (!time && !url && !host){
+                createResultDiv(loader, result);
+            } else {
+                for (let i = 0; i < 2; i++){
+                    if (i === 0){
+                        const button = document.createElement('button');
+                        const timeRange = `from=${(time * 1000) - 2 * 60 * 1000}&to=${(time * 1000) + 2 * 60 * 1000}`;
+                        button.id = 'url';
+                        button.addEventListener('click',(e) => {
+                            e.preventDefault();
+                            window.open(url + host + timeRange);
+                        })
+                        button.textContent = 'Ссылка на pmm2'
+                        loader.insertAdjacentElement('afterend', button);
+                    } else if (i === 1){
+                        createResultDiv(loader, result)
+                    }
+                }
+            }
+        }
+
+        const createResultDiv = (formToAppend, text) => {
+            {
+                const div = document.createElement('div');
+                div.textContent = text;
+                div.id = 'result';
+                formToAppend.insertAdjacentElement('afterend',div)
+            }
+        }
+
+
+        //обработка данных с дашборда (аннотаций) и проверка были ли проблемы у пинапа
+        // for (let i = 0; i < fetchForAnnotation.length; i ++){
+        //     if(!fetchForAnnotation[i].alertName){
+        //         if (!fetchForAnnotation[i].text.includes('pinup')) {
+        //             annotation = fetchForAnnotation[i].text
+        //         }
+        //     }
+        // }
+
+
+        const loggingdbCheck = async () => {
+
+            idCleanUp('indicator', 'url', 'result')
+            loadingSpinner('start',4);
+            indicator();
+
+            const parsedArray = await responseArrayParse('loggingDB');
+            const threadsRunning =[];
+            const threadsConnected = [];
+
+            let spikesThreadRun, spikesThreadConnect;
+            let result = 'Это не loggingDB1-3';
+            let indicatorElem = document.querySelector('#indicator')
+
+            indicatorElem.style.backgroundColor = 'green';
+
+            for (let i = 0; i < parsedArray.length; i++){
+                if (parsedArray[i].metric.__name__.includes('running')){
+                    parsedArray[i].values.forEach(value => {
+                        threadsRunning.push(value);
+                    })
+                } else {
+                    parsedArray[i].values.forEach(value => {
+                        threadsConnected.push(value);
+                    })
+                }
+            }
+
+            const spikeDetector = (array) => {
+                const applicableDiff = 100;
+                let result = []
+                for (let i = 0; i < array.length; i++){
+                    if (array[i + 1] !== undefined){
+                        if ((+array[i][1] + applicableDiff) < +array[i + 1][1] ){
+                            result.push(array[i + 1])
+                        }
+                    } else break
+
+                }
+                return result;
+            }
+
+            const compareArrays = (threadsRunning, threadsConnected) => {
+                for (let i = 0; i< threadsConnected.length; i++ ){
+                    for (let j = 0; j < threadsRunning.length; j++){
+                        if (threadsRunning[j][0] === threadsConnected[i][0]){
+                            result = 'Это был loggingDB1-3!'
+                            showResult(
+                                result,
+                                threadsRunning[j][0],
+                                `https://pmm2.egamings.com/graph/d/mysql-instance-summary/mysql-instance-summary?orgId=1&`,
+                                '&var-node_name=site1-telia-loggingdb1-3&var-crop_host=site1-telia-l&var-service_name=site1-telia-loggingdb1-3-mysql&');
+                            indicatorElem.style.backgroundColor = 'red'
+                        }
+                    }
+                }
+                if (document.querySelectorAll('#result')) {
+                    const loader = document.querySelector('.loader');
+                    createResultDiv(loader, result);
+                }
+            }
+
+            spikesThreadRun = spikeDetector(threadsRunning);
+            spikesThreadConnect = spikeDetector(threadsConnected)
+
+            compareArrays(spikesThreadRun, spikesThreadConnect);
+
+            loadingSpinner('stop')
+            console.log(result);
+
+        }
+
+        const flowControlCheck = async () => {
+            idCleanUp('indicator', 'url', 'result');
+            loadingSpinner('start',4);
+            const flowControlArray = await responseArrayParse('flowControl');
+            if(flowControlArray.length === 0){
+                showResult('No flow control spikes at selected timeframe');
+            } else {
+                for (let i = 0; i < flowControlArray.length; i++){
+                    showResult(
+                        `Был выброс flow control на: ${flowControlArray[i].host}`,
+                        flowControlArray[i].time,
+                        `https://pmm2.egamings.com/graph/d/pxc-cluster-summary/pxc-galera-cluster-summary?`,
+                        `var-cluster=fundb${node}&`)
+                }
+            }
+            loadingSpinner('stop');
+        }
+
+        const pinupCheck = async () => {
+            idCleanUp('indicator', 'url', 'result');
+            loadingSpinner('start',4);
+            const parsedArray = await responseArrayParse('pinup');
+
+            if (parsedArray !== undefined){
+                showResult('Это был Пинап!')
+                //TODO добавить сюда генерацию ссылки
+            } else {
+                showResult('Это не Пинап!')
+            }
+
+            loadingSpinner('stop');
+        }
+
+        const checkForAnnotations = async () => {
+            idCleanUp('indicator', 'url', 'result');
+            loadingSpinner('start',4);
+            const parsedArray = await responseArrayParse('annotations');
+            console.log(parsedArray);
+            loadingSpinner('stop');
+        }
+
+        window.onload = () => {
+            updateTime(dateFrom, dateTo)
+        }
+
+    </script>
+</head>
+<body>
+
+<label for="datetime-start">Incidents from:</label><br>
+<input type="datetime-local" id="datetime-start"><br>
+<label for="datetime-end">to:</label>
+</br>
+<input type="datetime-local" id="datetime-end"></br>
+</br>
+<button id="loggingDB" onclick="loggingdbCheck()">Check if it was loggingDB1-3</button>
+<button id="flowControl" onclick="flowControlCheck()">Check if there were any flow Control spikes</button>
+<button id="pinup" onclick="pinupCheck()">Check if it was Pinup</button>
+<button id="annotations" onclick="checkForAnnotations()">Check for annotations</button>
+<div class="loader">
+</div>
+<div>
+<!--    <button onclick="google.script.run.withSuccessHandler(onReload).getTimeFromSheet()">Обновить</button>-->
+</div>
+</body>
+</html>
