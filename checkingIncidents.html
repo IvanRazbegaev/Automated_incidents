@@ -115,14 +115,16 @@
             idCleanUp('result', 'url', 'button', 'indicator')
         }
 
+        google.script.run.withSuccessHandler(onReload).getTimeFromSheet();
+
         const getDateTimeChosen = function () {
 
             if (Date.parse(`${dateTo}:00Z`) < Date.parse(`${dateFrom}:00Z`)){
                 alert(`Date-time in "From" field can't be more that in "To" field!`);
                 return false;
             };
-            const queryDateFrom = `${new Date(Date.parse(`${dateFrom}`)).toISOString().slice(0, -5)}Z`;
-            const queryDateTo = `${new Date(Date.parse(`${dateTo}`)).toISOString().slice(0, -5)}Z`;
+            const queryDateFrom = `${new Date(Date.parse(`${dateFrom}`) - 1 * 60 * 1000).toISOString().slice(0, -5)}Z`;
+            const queryDateTo = `${new Date(Date.parse(`${dateTo}`) + 1 * 60 * 1000).toISOString().slice(0, -5)}Z`;
 
             return {queryDateFrom,queryDateTo}
         }
@@ -142,7 +144,7 @@
             const date = getDateTimeChosen();
 
             const url = `https://dashboard.egamings.com/`;
-            const query = `api/annotations?from=${date.queryDateFrom}&to=${date.queryDateTo}&dashboardId=6`;
+            const query = `api/annotations?from=${Date.parse(date.queryDateFrom) - 3 * 60 * 1000}&to=${Date.parse(date.queryDateTo) + 3 * 60 * 1000}&dashboardId=6`;
             const getData = fetch(url+query, {
                 headers: {
                     'Authorization': 'Basic Ym90X2Rhc2hib2FyZDplZVk3dGhhaCZpd2Vla29vY2hlZW1v'
@@ -205,7 +207,6 @@
                 const response = await getPrometheusShit(vmFlowControlQuery);
                 const data = response.data.result;
                 const result = [];
-
                 for (let i = 0; i < data.length; i++){
                     for (let j = 0; j < data[i].values.length; j++){
                         if (data[i].values[j][1] > 0.1){
@@ -252,23 +253,40 @@
                     const response = await getPrometheusShit(vmPinupQuery, 'prom-telia.egamings.com', '61s');
                     result.push(response.data.result[0].values);
                 }
+                console.log(result);
                 for (let i = 0; i < result.length; i++){
                     for (let j = 0; j < result[i].length; j++){
 
                         if (result[i][j][1] < fpmProcessesThreshold){
                             if ((result[i][j][1] < minFpmProcessesIdle) && minFpmProcessesIdle){
-                                minFpmProcessesIdle = result[i][j][1];
+                                minFpmProcessesIdle = {time: result[i][j][0],
+                                    idleProcesses: result[i][j][1]};
                             } else if (!minFpmProcessesIdle){
-                                minFpmProcessesIdle = result[i][j][1];
+                                minFpmProcessesIdle = {time: result[i][j][0],
+                                    idleProcesses: result[i][j][1]};
                             }
                         }
                     }
                 }
+                console.log(minFpmProcessesIdle);
                 return minFpmProcessesIdle;
             } else if (checkType === 'annotations'){
-                const response = getAnnotations();
+                const response = await getAnnotations();
+                const annotations = []
+                console.log(response.length);
+                for (let i = 0; i < response.length; i ++){
 
-                return response
+                    if(!response[i].alertName){
+                        if (!response[i].text.includes('pinup')) {
+                            annotations.push({
+                                time: response[i].time,
+                                text: response[i].text
+                            });
+                        }
+                    }
+                }
+
+                return annotations;
             }
         }
 
@@ -286,7 +304,7 @@
                             e.preventDefault();
                             window.open(url + host + timeRange);
                         })
-                        button.textContent = 'Ссылка на pmm2'
+                        button.textContent = 'Ссылка на дашборд/pmm'
                         loader.insertAdjacentElement('afterend', button);
                     } else if (i === 1){
                         createResultDiv(loader, result)
@@ -303,17 +321,6 @@
                 formToAppend.insertAdjacentElement('afterend',div)
             }
         }
-
-
-        //обработка данных с дашборда (аннотаций) и проверка были ли проблемы у пинапа
-        // for (let i = 0; i < fetchForAnnotation.length; i ++){
-        //     if(!fetchForAnnotation[i].alertName){
-        //         if (!fetchForAnnotation[i].text.includes('pinup')) {
-        //             annotation = fetchForAnnotation[i].text
-        //         }
-        //     }
-        // }
-
 
         const loggingdbCheck = async () => {
 
@@ -411,8 +418,11 @@
             const parsedArray = await responseArrayParse('pinup');
 
             if (parsedArray !== undefined){
-                showResult('Это был Пинап!')
-                //TODO добавить сюда генерацию ссылки
+                showResult(
+                    `Это был Пинап! Количество свободных fpm-процессов: ${parsedArray.idleProcesses}`,
+                    parsedArray.time,
+                    `https://dashboard.egamings.com/d/000000006/business-operations?orgId=1&`,
+                    ``)
             } else {
                 showResult('Это не Пинап!')
             }
@@ -425,6 +435,17 @@
             loadingSpinner('start',4);
             const parsedArray = await responseArrayParse('annotations');
             console.log(parsedArray);
+
+            if(parsedArray.length === 0){
+                showResult('На данное время нет аннотаций!')
+            } else {
+                parsedArray.forEach(annotation => {
+                    showResult(`На это время есть следующая аннотация: ${annotation.text}`,
+                        annotation.time / 1000,
+                        `https://dashboard.egamings.com/d/000000006/business-operations?orgId=1&`,
+                        ``)
+                })
+            }
             loadingSpinner('stop');
         }
 
@@ -449,7 +470,7 @@
 <div class="loader">
 </div>
 <div>
-<!--    <button onclick="google.script.run.withSuccessHandler(onReload).getTimeFromSheet()">Обновить</button>-->
+    <button onclick="google.script.run.withSuccessHandler(onReload).getTimeFromSheet()">Обновить</button>
 </div>
 </body>
 </html>
